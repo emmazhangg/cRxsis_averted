@@ -2,6 +2,35 @@
 import puppeteer from 'puppeteer';
 
 /**
+ * Get Puppeteer launch options for different environments
+ */
+function getPuppeteerOptions() {
+  const isVercel = process.env.VERCEL === '1';
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  if (isVercel || isProduction) {
+    return {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--disable-gpu'
+      ]
+    };
+  }
+  
+  return {
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  };
+}
+
+/**
  * Extract disposal sites from alternative page structures (non-table format)
  */
 async function extractFromAlternativeStructure(page) {
@@ -210,22 +239,20 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
   let browser;
   
   try {
-    browser = await puppeteer.launch({ 
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+    console.log('Launching browser with options for environment...');
+    browser = await puppeteer.launch(getPuppeteerOptions());
     
     const page = await browser.newPage();
     
     // Set longer timeout and add user agent
-    page.setDefaultTimeout(30000);
+    page.setDefaultTimeout(25000); // Reduced timeout for serverless
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
     
     console.log('Loading search page...');
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 25000 });
     
     // Wait for page to be fully loaded
-    await page.waitForSelector('form[name="searchForm"]', { timeout: 15000 });
+    await page.waitForSelector('form[name="searchForm"]', { timeout: 10000 });
     
     // Activate "Year-Round Drop-Off Locations" tab
     console.log('Activating Year-Round tab...');
@@ -238,13 +265,13 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
       return false;
     });
     
-    // Wait longer for tab to switch
-    await new Promise(res => setTimeout(res, 2000));
+    // Wait for tab to switch
+    await new Promise(res => setTimeout(res, 1500));
     
     // Fill ZIP code input
     console.log(`Filling ZIP code: ${zipCode}...`);
     const zipSel = 'input[name="searchForm:zipCodeInput"]';
-    await page.waitForSelector(zipSel, { timeout: 15000 });
+    await page.waitForSelector(zipSel, { timeout: 10000 });
     
     await page.evaluate((sel, zip) => {
       const input = document.querySelector(sel);
@@ -260,7 +287,7 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
     // Select radius radio
     console.log(`Selecting radius: ${radius} miles...`);
     const radiusSel = `input[name="searchForm:radiusInput"][value="${radius}"]`;
-    await page.waitForSelector(radiusSel, { timeout: 15000 });
+    await page.waitForSelector(radiusSel, { timeout: 10000 });
     
     await page.evaluate((sel) => {
       const radio = document.querySelector(sel);
@@ -283,7 +310,7 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
       if (submitButton) {
         console.log('Found submit button, clicking...');
         await Promise.all([
-          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }),
           submitButton.click()
         ]);
         formSubmitted = true;
@@ -296,7 +323,7 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
     if (!formSubmitted) {
       try {
         await Promise.all([
-          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }),
           page.evaluate(() => {
             const form = document.forms['searchForm'];
             if (form) {
@@ -320,7 +347,7 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
     
     // Wait for results
     await page.waitForSelector('body', { timeout: 5000 });
-    await new Promise(res => setTimeout(res, 3000));
+    await new Promise(res => setTimeout(res, 2000));
     
     // Check for no results
     const pageText = await page.evaluate(() => document.body.textContent);
@@ -328,9 +355,6 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
       console.log('No results found for this location');
       return [];
     }
-    
-    // Take screenshot for debugging
-    await page.screenshot({ path: 'debug_page.png' });
     
     // Try to find table rows with more specific selectors
     const possibleSelectors = [
@@ -395,18 +419,6 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
     
     console.log(`Successfully extracted ${results.length} disposal sites`);
     
-    // Log a few examples for verification
-    if (results.length > 0) {
-      console.log('\nFirst few results:');
-      results.slice(0, 3).forEach((site, index) => {
-        console.log(`${index + 1}. ${site.name}`);
-        console.log(`   Address: ${site.address1} ${site.address2}`);
-        console.log(`   Location: ${site.cityStateZip}`);
-        console.log(`   Distance: ${site.distance}`);
-        console.log('');
-      });
-    }
-    
     return results;
     
   } catch (error) {
@@ -419,32 +431,5 @@ export async function getDisposalSites(zipCode = '73120', radius = '20') {
   }
 }
 
-// Example usage and testing function
-export async function testScraper() {
-  try {
-    console.log('Testing scraper...');
-    const results = await getDisposalSites('73120', '20');
-    
-    console.log(`\n=== RESULTS ===`);
-    console.log(`Found ${results.length} disposal sites:\n`);
-    
-    results.forEach((site, index) => {
-      console.log(`${index + 1}. ${site.name}`);
-      console.log(`   Address: ${site.address1}${site.address2 ? ' ' + site.address2 : ''}`);
-      console.log(`   Location: ${site.cityStateZip}`);
-      console.log(`   Distance: ${site.distance}`);
-      if (site.mapUrl) {
-        console.log(`   Map: ${site.mapUrl}`);
-      }
-      console.log('');
-    });
-    
-    return results;
-  } catch (error) {
-    console.error('Test failed:', error);
-    throw error;
-  }
-}
-
-// Uncomment to run test
+// Remove the test function call for production
 testScraper();
